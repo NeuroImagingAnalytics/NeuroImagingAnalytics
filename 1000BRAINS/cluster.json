@@ -1,0 +1,57 @@
+{
+    "__default__" :
+    {
+        "partition" : "batch",
+        "cores" : 24,
+        "gpus" : 0,
+        "mem" : 96000,
+        "time" : "23:59:59"
+    },
+
+    "align_apm_t1w" :
+    {
+        "cores" : 48
+    },
+
+    "transform_tpms" :
+    {
+        "cores" : 48
+    },
+
+    "noddi_prtcl" :
+    {
+        "cores" : 48
+    },
+
+    "mdt_init" :
+    {
+        "partition" : "gpus",
+        "cores" : 24,
+        "gpus" : 1,
+        "mem" : 96000,
+        "time" : "00:05:00"
+    },
+
+    "noddi_mdt" :
+    {
+        "partition" : "gpus",
+        "cores" : 24,
+        "gpus" : 4,
+        "mem" : 96000,
+        "time" : "01:30:00"
+    },
+
+    "noddi_merge_and_noise_std" :
+    {
+        "partition" : "gpus",
+        "cores" : 48,
+        "gpus" : 0,
+        "mem" : 96000,
+        "time" : "00:20:00"
+    },
+
+    "diffusion_tensor" :
+    {
+        "cores" : 48
+    }
+}

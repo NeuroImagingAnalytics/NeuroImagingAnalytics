@@ -1,0 +1,403 @@
+#!/bin/bash
+
+# Copyright 2017 Forschungszentrum Juelich
+
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+
+# check if this is a JURECA login node
+SYSTEMNAME=""
+if [[ -e /etc/FZJ/systemname ]]; then
+    SYSTEMNAME="$(cat /etc/FZJ/systemname)"
+fi
+if [[ ${SYSTEMNAME,,} == "jureca" ]]; then
+    IS_JURECA=1
+else
+    IS_JURECA=0
+fi
+
+
+if [[ $IS_JURECA -eq 1 ]]; then
+    # no colors on JURECA to keep log files readable
+    BLUE=""
+    GRAY=""
+    BLACK=""
+else
+    # color output on standard computer
+    BLUE="\e[00;34m"
+    GRAY="\e[01;30m"
+    BLACK="\e[00m"
+fi
+# LOGFILE=""
+# NAME=""
+
+
+function get_git_version() {
+    OLD_DIR=$(pwd)
+    cd $(dirname $0)
+    VERSION="$(git describe --long)"
+    cd $OLD_DIR
+    echo $VERSION
+}
+
+SCRIPT_NAME=$0
+SCRIPT_VERSION=$(get_git_version)
+SCRIPT_DATE="$(stat -c %y $SCRIPT_NAME)"
+SCRIPT_SHA1="$(sha1sum $SCRIPT_NAME | cut -d ' ' -f 1)"
+
+export LC_NUMERIC="en_US.UTF-8"
+export FSLOUTPUTTYPE="NIFTI_GZ"
+if [[ $FSLOUTPUTTYPE == "NIFTI_GZ" ]]; then
+    export NIFTI_EXT="nii.gz"
+elif [[ $FSLOUTPUTTYPE == "NIFTI" ]]; then
+    export NIFTI_EXT="nii"
+else
+    export NIFTI_EXT=""
+fi
+
+COMMANDLINE="$0 $@"
+
+function print_and_log () {
+    DATE=$(date +"%Y-%m-%d %k:%M:%S")
+    echo -e "${BLUE}${DATE}   ${1}${BLACK}"
+    if [[ -n $LOGFILE ]]; then
+        if [[ -n $LOGFILE ]]; then
+            echo -e "${DATE}   $1" >> ${LOGFILE}
+        fi
+    fi
+}
+
+
+
+# indicate script failure
+function failed () {
+    print_and_log "$1"
+    echo "#############################################"
+    echo
+    exit 1
+}
+
+# verify that an image exists and that it has voxel values other than 0
+function verify_image_content () {
+    verify $1
+    if [[ "0.000000 0.000000 " == $( ${FSLDIR}/bin/fslstats $1 -R ) ]]; then
+        print_and_log "File '$1' has only voxels with value 0 !"
+        echo "#############################################"
+        echo
+        exit 1
+    fi
+}
+
+# verify that a file exists and has size > 0
+function verify () {
+    if [[ ! -f $1 ]]; then
+        print_and_log "File '$1' does not exist!"
+        echo "#############################################"
+        echo
+        exit 1
+    fi
+    if [[ ! -s $1 ]]; then
+        print_and_log "File '$1' is not valid!"
+        echo "#############################################"
+        echo
+        exit 1
+    fi
+}
+
+# verify that a folder exists
+function verify_dir () {
+    if [[ ! -d $1 ]]; then
+        print_and_log "Folder '$1' does not exist!"
+        echo "#############################################"
+        echo
+        exit 1
+    fi
+}
+
+
+function fzjversioninfo() {
+    if [[ -z $MRTRIXDIR ]]; then
+        MRTRIXDIR=$(dirname $(which mrinfo) 2> /dev/null)
+        if [[ -n $MRTRIXDIR ]]; then
+            export MRTRIXDIR
+        fi
+    fi
+    print_and_log "Computer : $(uname -a)"
+    print_and_log "FZJ      : $FZJDIR ($SCRIPT_VERSION)"
+    print_and_log "FSL      : $FSLDIR  ($(cat ${FSLDIR}/etc/fslversion))"
+    print_and_log "ANTs     : $ANTSPATH ()"
+    print_and_log "MRtrix   : $MRTRIXDIR  ($(${MRTRIXDIR}/mrinfo --version | head -n 1 | cut -d ' ' -f 3))"
+}
+
+
+
+
+function script_start() {
+    print_and_log ""
+    print_and_log "++++++++++++++++++++++++++++++++++++++++++++++++++"
+    print_and_log "+"
+    print_and_log "+ Starting $( basename $SCRIPT_NAME ) $SCRIPT_VERSION"
+    print_and_log "+"
+    print_and_log "+   Date: $SCRIPT_DATE"
+    print_and_log "+   SHA1: $SCRIPT_SHA1"
+    print_and_log "+"
+    for i in fzj_dmri_functions.source fzj_options.source; do
+        print_and_log "+   $(sha1sum $(dirname ${0})/$i)"
+    done
+    print_and_log "+"
+    print_and_log "++++++++++++++++++++++++++++++++++++++++++++++++++"
+    print_and_log ""
+    fzjversioninfo
+    print_and_log ""
+    print_and_log " Command line: $COMMANDLINE"
+    print_and_log ""
+}
+
+function script_end() {
+
+    # ensure that all output files have been created
+    for i in $OUTPUT_FILES; do
+        verify $i
+    done
+    # ensure that all output folders have been created
+    for i in $OUTPUT_FOLDERS; do
+        verify_dir $i
+    done
+
+    # compute the checksums
+    if [[ -n $CHECKSUM ]]; then
+        compute_file_and_folder_checksums $CHECKSUM $OUTPUT_FILES $OUTPUT_FOLDERS
+    fi
+
+    print_and_log ""
+    print_and_log "--------------------------------------------------"
+    print_and_log "- $( basename $0 ) $SCRIPT_VERSION : Done."
+    print_and_log "--------------------------------------------------"
+    exit 0
+}
+
+
+###################################################
+#
+# check_file_and_folder_checksums
+#
+# the first and only parameter is the name of
+# the file with checksums
+#
+###################################################
+function check_file_and_folder_checksums() {
+    CHECKSUM_FILE=${1}
+    sha1sum -c --status $CHECKSUM_FILE > /dev/null 2> /dev/null
+    if [[ $? -ne 0 ]]; then
+        echo "FAILED"
+        return 1
+    else
+        echo "OK"
+        return 0
+    fi
+}
+
+###################################################
+#
+# compute_file_and_folder_checksums
+#
+# first parameter is the checksum file to generate
+# following parameters are names of files or folders
+# if the parameter is the name of a folder then all files
+# within this folder and in all sub-folders will be considered
+#
+###################################################
+function compute_file_and_folder_checksums() {
+    CHECKSUM_FILE=$1
+    shift
+    print_and_log "Computing checksums for files and folders"
+    if [[ -z $CHECKSUM_FILE ]]; then
+        print_and_log "  - missing name for checksum file."
+        return
+    else
+        print_and_log "  - $CHECKSUM_FILE"
+    fi
+    # create file in case it does not exist yet
+    if [[ ! -e $CHECKSUM_FILE ]]; then
+        mkdir -p $(dirname $CHECKSUM_FILE)
+        touch $CHECKSUM_FILE
+    fi
+
+    # compute checksums for all files and folders (+files in folders)
+    for i in $@; do
+        # check if parameter points to a folder or to a file
+        if [[ -d $i ]]; then
+            # it's a folder
+            for j in $(find $i -type f -iname "*" | sort); do
+                sha1sum $j
+            done
+        else
+            # it's probably a file
+            verify $i
+            sha1sum $i
+        fi
+    done >> $CHECKSUM_FILE
+
+    # also add checksum of script
+    if [[ -n $SCRIPT_NAME ]]; then
+        if [[ -f $SCRIPT_NAME ]]; then
+            sha1sum $0 >> $CHECKSUM_FILE
+        fi
+    fi
+}
+
+
+###################################################
+#
+# rotate a vector by a matrix
+# first three options are the x, y and z components of the vector
+# fourth option is the name of the file that holds the matrix components
+#    in FSL (flirt) convention
+# rotated vector components are written to std.out
+#
+###################################################
+function rotate_vector_by_matrix() {
+
+    # ensure non-scientific notation, required for bc
+    XX=$(printf "%f" $1)
+    YY=$(printf "%f" $2)
+    ZZ=$(printf "%f" $3)
+
+    IN_MAT=$4
+    verify $IN_MAT
+
+    # read components of matrix
+    # only 3x3 rotation required, translation has no effect
+    M1=$(head -n 1 $IN_MAT)
+    M11=$(printf "%f" $(echo $M1 | cut -d ' ' -f 1))
+    M12=$(printf "%f" $(echo $M1 | cut -d ' ' -f 2))
+    M13=$(printf "%f" $(echo $M1 | cut -d ' ' -f 3))
+
+    M2=$(head -n 2 $IN_MAT | tail -n 1 )
+    M21=$(printf "%f" $(echo $M2 | cut -d ' ' -f 1))
+    M22=$(printf "%f" $(echo $M2 | cut -d ' ' -f 2))
+    M23=$(printf "%f" $(echo $M2 | cut -d ' ' -f 3))
+
+    M3=$(head -n 3 $IN_MAT | tail -n 1)
+    M31=$(printf "%f" $(echo $M3 | cut -d ' ' -f 1))
+    M32=$(printf "%f" $(echo $M3 | cut -d ' ' -f 2))
+    M33=$(printf "%f" $(echo $M3 | cut -d ' ' -f 3))
+
+    # compute transformed vector
+    OUT_X=$(echo "scale=7;  ($M11 * $XX) + ($M12 * $YY) + ($M13 * $ZZ)" | bc -l)
+    OUT_Y=$(echo "scale=7;  ($M21 * $XX) + ($M22 * $YY) + ($M23 * $ZZ)" | bc -l)
+    OUT_Z=$(echo "scale=7;  ($M31 * $XX) + ($M32 * $YY) + ($M33 * $ZZ)" | bc -l)
+
+    # print result
+    echo $OUT_X $OUT_Y $OUT_Z
+}
+
+
+
+###################################################
+#
+# generate absolute path from relative path
+#
+# $1     : relative filename
+# return : absolute path
+#
+# from http://stackoverflow.com/questions/3915040/bash-fish-command-to-print-absolute-path-to-a-file
+#
+###################################################
+function abspath() {
+    if [ -d "$1" ]; then
+        # dir
+        (cd "$1"; pwd)
+    else
+#    elif [ -f "$1" ]; then
+        # file
+        if [[ $1 == */* ]]; then
+            echo "$(cd "${1%/*}"; pwd)/${1##*/}"
+        else
+            echo "$(pwd)/$1"
+        fi
+    fi
+}
+
+
+###################################################
+#
+# generate absolute paths from relative paths
+#
+# $1, $2, ... : relative file- and/or directory names
+# return      : absolute path names
+#
+# calls abspath in a for loop
+# prints one absolute path per line
+#
+###################################################
+function abspaths() {
+    for ii in $@; do
+        abspath "$ii"
+    done
+}
+
+
+
+
+# function write_done() {
+#     if [[ -d $1 ]]; then
+#         echo "Done" > ${1}/done
+#     fi
+# }
+#
+# function remove_done() {
+#     if [[ -d $1 ]]; then
+#         rm -f ${1}/done
+#     fi
+# }
+#
+# function check_done() {
+#     if [[ -d $1 ]]; then
+#         # check if the file "done" exists and is the youngest in the folder
+#         if [[ $(ls -t $1 | head -n 1) == "done" ]]; then
+#             return 1
+#         fi
+#     fi
+#     return 0
+# }
+
+
+MY_PID=$$
+
+function childPIDs () {
+    CURRENT_PID=$1
+    if [[ -n $CURRENT_PID ]]; then
+        local CHILDREN_PIDS=$( ps -o pid= --ppid $CURRENT_PID )
+        ALL_PIDS="$ALL_PIDS $( echo -ne $CHILDREN_PIDS )"
+        for i in $CHILDREN_PIDS; do
+            childPIDs $i
+        done
+    fi
+    echo $ALL_PIDS
+}
+
+control_c() {
+    echo "Control-C"
+    echo "  - terminating all child processes"
+    #echo kill -TERM $(childPIDs $MY_PID)
+    #kill -TERM $(childPIDs $MY_PID)
+    kill $(jobs -p)
+    #kill -TERM -P $MY_PID
+    sleep 1
+    echo "  - exiting"
+    exit 130
+}
+
+# trap control_c SIGINT

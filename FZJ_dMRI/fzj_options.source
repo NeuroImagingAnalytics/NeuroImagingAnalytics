@@ -1,0 +1,456 @@
+#!/bin/bash
+
+# Copyright 2017 Forschungszentrum Juelich
+
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+
+# This file provides sophisticated command line parsing, file checking and a help
+# function when sourced by a bash script.
+#
+# The following variables have to be defined before sourcing this file:
+# 1. DESCRIPTION - a string that described what the script does.
+#                  line breaks are indicated by a '+' sign
+# 2. OPTIONS     - an array with the following information separated
+#                  by a '+' sign
+#                    - option       name of the option (without leading '-')
+#                    - variable     name of the variable to store the parameter
+#                    - name         name of the data provided
+#                    - description  short text describing the data
+#                    - in/out       'IN', 'OUT' or 'IGNORE'
+#                    - type         'FILE', 'FOLDER' or 'OTHER'
+#                    - mandatory    '1' if parameter is mandatory, otherwise '0'
+#                    - default      the parameters default value or 'none'
+#
+# Example:
+#
+# DESCRIPTION="This script does...\
+# +this text is in the second line\
+# +and this one in the third."
+#
+# OPTIONS[0]="op  +  var  +  n  +  this parameter is useful  +  INPUT  + FILE + 1 + none"
+# OPTIONS[1]="po  +  val  +  m  +  this parameter is useless +  INPUT  + FILE + 1 + foo.txt"
+#
+#
+#
+# The following default options will be appended:
+#
+#  -checksum: name of the file with sha1 hash keys
+#  -parallel: number of parallel threads to use ($FZJ_NUM_PROCS e.g. fzj_parallel.sh)
+#  -log:      name of the logfile
+#  -n:        name of the data set
+#
+# The following extra variables are available after sourcing this script:
+#
+#  - $CHECKSUM       : file name of the file with checksums (if provided)
+#  - $INPUT_FILES    : list of input files (separated by spaces)
+#  - $INPUT_FOLDERS  : list of input folders (separated by spaces)
+#  - $OUTPUT_FILES   : list of output files (separated by spaces)
+#  - $OUTPUT_FOLDERS : list of output folders (separated by spaces)
+#
+#
+
+
+
+
+# print_and_log ""
+# print_and_log "Importing $(dirname ${0})/fzj_options.source"
+# print_and_log "   SHA1: $(sha1sum $(dirname ${0})/fzj_options.source | cut -d ' ' -f 1)"
+# print_and_log ""
+
+
+
+
+# create folder for temp file
+mkdir -p /tmp/$(basename $0 .sh)/
+verify_dir /tmp/$(basename $0 .sh)/
+
+# define uniq temp file name
+OPTIONS_IMPORT="/tmp/$(basename $0 .sh)/$(basename $0 .sh)_${RANDOM}-${RANDOM}-${RANDOM}.txt"
+
+# append option for file checksums
+OPTIONS[${#OPTIONS[@]}]="checksum + CHECKSUM  +  file      +  name of the file with checksums of the input and output files + IGNORE  + FILE  +  0  +  none"
+
+# append option for number of parallel threads
+OPTIONS[${#OPTIONS[@]}]="parallel + FZJ_NUM_PROCS  +  int|string      +  number of parallel threads to use (e.g. fzj_parallel.sh), a positive number, 'max' or 'dynamic' + IGNORE  + OTHER  +  0  +  dynamic"
+
+# append option for logfile
+OPTIONS[${#OPTIONS[@]}]="log + LOGFILE  +  file      +  name of the log file  + IGNORE  + FILE  +  0  +  none"
+
+# append option for data set name
+OPTIONS[${#OPTIONS[@]}]="n + NAME  +  string      +  name of the data set  + IN  + OTHER  +  0  +  none"
+
+# get maximum index of options
+let MAX_OPT_INDEX=${#OPTIONS[@]}-1
+
+# remove white spaces next to '+' signs
+for index in $(seq 0 $MAX_OPT_INDEX); do
+    OPTIONS[$index]=$(echo ${OPTIONS[$index]} | tr -s [:blank:] | sed -e "s/ +/+/g" | sed -e "s/+ /+/g")
+done
+
+# create empty temp file
+echo "" > $OPTIONS_IMPORT
+verify $OPTIONS_IMPORT
+
+# Compose the usage function
+cat <<'EOF' >> $OPTIONS_IMPORT
+#########################################
+#
+#  usage
+#
+#########################################
+
+function usage () {
+    print_and_log
+    print_and_log "This is $( basename $SCRIPT_NAME ) ${SCRIPT_VERSION}."
+    print_and_log
+EOF
+
+# parse the description string
+IFS="+" read -r -a DEC <<< $DESCRIPTION
+let MAX_DESCRIPTION_INDEX=${#DEC[@]}-1
+# print the description line by line
+for index in $(seq 0 $MAX_DESCRIPTION_INDEX); do
+    echo "    print_and_log \"${DEC[$index]}\""
+done  >> $OPTIONS_IMPORT
+
+cat <<'EOF' >> $OPTIONS_IMPORT
+    print_and_log
+    print_and_log "Usage: $( basename $SCRIPT_NAME )  [parameters]"
+    print_and_log
+EOF
+
+# output mandatory and optional arguments
+for MAN_OPT in 1 0; do
+    echo "    print_and_log \"\""
+    if [[ $MAN_OPT -eq 1 ]]; then
+        echo "    print_and_log \"Mandatory:\""
+    else
+        echo "    print_and_log \"Optional:\""
+    fi
+
+    for index in $(seq 0 $MAX_OPT_INDEX); do
+        # read the different parts of the option string
+        IFS="+" read -r OPT_OPT OPT_VAR OPT_NAME OPT_TEXT OPT_INOUT OPT_TYPE OPT_MANDATORY OPT_DEFAULT <<< ${OPTIONS[$index]}
+        if [[ $MAN_OPT  -eq $OPT_MANDATORY ]]; then
+            OPT_NAME2="<$OPT_NAME>"
+            if [[ ${OPT_DEFAULT,,} != "none" ]]; then
+                DEFAULT=" (default: $OPT_DEFAULT)"
+            else
+                DEFAULT=""
+            fi
+            printf "    print_and_log \"  -%-10s %-10s %s\"\n" "$OPT_OPT" "$OPT_NAME2" "${OPT_TEXT}$DEFAULT"
+        fi
+    done
+done >> $OPTIONS_IMPORT
+
+#echo "  print_and_log \"$@\"" >> $OPTIONS_IMPORT
+
+# close the usage function's bracket
+cat <<'EOF' >> $OPTIONS_IMPORT
+    print_and_log
+    print_and_log
+}
+
+EOF
+
+
+
+# parse command line options
+cat <<'EOF' >> $OPTIONS_IMPORT
+#########################################
+#
+#  parse command line options
+#
+#########################################
+
+EOF
+
+# set default values for variables
+for index in $(seq 0 $MAX_OPT_INDEX); do
+    # read the different parts of the option string
+    IFS="+" read -r OPT_OPT OPT_VAR OPT_NAME OPT_TEXT OPT_INOUT OPT_TYPE OPT_MANDATORY OPT_DEFAULT <<< ${OPTIONS[$index]}
+    if [[ ${OPT_DEFAULT,,} == "none" ]]; then
+        echo "$OPT_VAR=\"\""
+    else
+        echo "$OPT_VAR=\"$OPT_DEFAULT\""
+    fi
+done >> $OPTIONS_IMPORT
+
+
+cat <<'EOF' >> $OPTIONS_IMPORT
+
+while [[ ! -z "$1" ]]; do
+    case "$1" in
+EOF
+
+# pars all options
+for index in $(seq 0 $MAX_OPT_INDEX); do
+    # read the different parts of the option string
+    IFS="+" read -r OPT_OPT OPT_VAR OPT_NAME OPT_TEXT OPT_INOUT OPT_TYPE OPT_MANDATORY OPT_DEFAULT <<< ${OPTIONS[$index]}
+    echo "        -${OPT_OPT})        ${OPT_VAR}=\$2;  shift ;;"
+done >> $OPTIONS_IMPORT
+
+cat <<'EOF' >> $OPTIONS_IMPORT
+        -h)        usage; exit 0 ;;
+        --help)    usage; exit 0 ;;
+        *) usage; print_and_log "ERROR: Unknown parameter $1 !"; print_and_log ""; print_and_log "$COMMANDLINE"; exit 1;;
+    esac
+    shift
+done
+
+
+#########################################
+#
+# compose name string (add '-' to name)
+#
+#########################################
+
+NAME_=""
+if [[ -n $NAME ]]; then
+    NAME_="${NAME}-"
+fi
+
+
+#########################################
+#
+# ensure folder for logfile exists
+#
+#########################################
+if [[ -n $LOGFILE ]]; then
+    mkdir -p $(dirname $LOGFILE)
+    touch $LOGFILE
+fi
+
+
+#########################################
+#
+# insert the script_start statement
+#
+#########################################
+
+script_start
+
+
+EOF
+
+
+
+cat <<'EOF' >> $OPTIONS_IMPORT
+
+#########################################
+#
+# verify that we have all required parameters
+#
+#########################################
+ERROR_STRING=""
+EID=0
+EOF
+
+for index in $(seq 0 $MAX_OPT_INDEX); do
+    # read the different parts of the option string
+    IFS="+" read -r OPT_OPT OPT_VAR OPT_NAME OPT_TEXT OPT_INOUT OPT_TYPE OPT_MANDATORY OPT_DEFAULT <<< ${OPTIONS[$index]}
+    if [[ $OPT_MANDATORY -eq 1 ]]; then
+        echo "if [[ -z \$$OPT_VAR ]]; then"
+        echo "    ERROR_STRING[EID]=\"    -$OPT_OPT <${OPT_NAME}>\""
+        echo "    let EID=\$EID+1"
+        echo "fi"
+    fi
+done >> $OPTIONS_IMPORT
+
+cat <<'EOF' >> $OPTIONS_IMPORT
+
+if [[ -n $ERROR_STRING ]]; then
+    usage
+    print_and_log
+    print_and_log "------------------------------------------------------------"
+    print_and_log
+    print_and_log "Please specify the following non-optional parameters"
+    for i in $(seq 0 $EID); do
+        print_and_log "${ERROR_STRING[$i]}"
+    done
+    exit 1
+fi
+
+EOF
+
+cat <<'EOF' >> $OPTIONS_IMPORT
+
+#########################################
+#
+# verify that all input files exist
+#
+#########################################
+
+EOF
+
+for index in $(seq 0 $MAX_OPT_INDEX); do
+    # read the different parts of the option string
+    IFS="+" read -r OPT_OPT OPT_VAR OPT_NAME OPT_TEXT OPT_INOUT OPT_TYPE OPT_MANDATORY OPT_DEFAULT <<< ${OPTIONS[$index]}
+    if [[ ${OPT_INOUT,,} == "in" ]]; then
+        if [[ ${OPT_TYPE,,} == "file" ]]; then
+            echo "if [[ -n \$$OPT_VAR ]]; then"
+            echo "    verify \$$OPT_VAR"
+            echo "fi"
+        fi
+    fi
+done >> $OPTIONS_IMPORT
+
+
+cat << 'EOF' >> $OPTIONS_IMPORT
+
+#########################################
+#
+# check if script has to be executed
+#
+#########################################
+
+
+INPUT_FILES=""
+INPUT_FOLDERS=""
+OUTPUT_FILES=""
+OUTPUT_FOLDERS=""
+
+EOF
+
+# compose variables of input and output files and folders
+for index in $(seq 0 $MAX_OPT_INDEX); do
+    # read the different parts of the option string
+    IFS="+" read -r OPT_OPT OPT_VAR OPT_NAME OPT_TEXT OPT_INOUT OPT_TYPE OPT_MANDATORY OPT_DEFAULT <<< ${OPTIONS[$index]}
+    if [[ ${OPT_INOUT,,} == "in" ]]; then
+        if [[ ${OPT_TYPE,,} == "file" ]]; then
+            echo "INPUT_FILES=\"\$INPUT_FILES \$$OPT_VAR\""
+        fi
+        if [[ ${OPT_TYPE,,} == "folder" ]]; then
+            echo "INPUT_FOLDERS=\"\$INPUT_FOLDERS \$$OPT_VAR\""
+        fi
+    fi
+    if [[ ${OPT_INOUT,,} == "out" ]]; then
+        if [[ ${OPT_TYPE,,} == "file" ]]; then
+            echo "OUTPUT_FILES=\"\$OUTPUT_FILES \$$OPT_VAR\""
+        fi
+        if [[ ${OPT_TYPE,,} == "folder" ]]; then
+            echo "OUTPUT_FOLDERS=\"\$OUTPUT_FOLDERS \$$OPT_VAR\""
+        fi
+    fi
+done >> $OPTIONS_IMPORT
+
+
+cat << 'EOF' >> $OPTIONS_IMPORT
+
+print_and_log ""
+print_and_log "Input files:"
+print_and_log "------------"
+for i in $INPUT_FILES; do
+    print_and_log "  - $i"
+done
+
+print_and_log ""
+print_and_log "Input folders:"
+print_and_log "--------------"
+for i in $INPUT_FOLDERS; do
+    print_and_log "  - $i"
+done
+
+print_and_log ""
+print_and_log "Output files:"
+print_and_log "-------------"
+for i in $OUTPUT_FILES; do
+    print_and_log "  - $i"
+done
+
+print_and_log ""
+print_and_log "Output folders:"
+print_and_log "---------------"
+for i in $OUTPUT_FOLDERS; do
+    print_and_log "  - $i"
+done
+print_and_log ""
+
+EOF
+
+cat << 'EOF' >> $OPTIONS_IMPORT
+if [[ -n $CHECKSUM ]]; then
+    ALL_DATA_OK=1
+    # check if all output files are present
+    for i in $OUTPUT_FILES; do
+        if [[ ! -e $i ]]; then
+            ALL_DATA_OK=0
+            break
+        fi
+    done
+    # check if all output folders are present
+    for i in $OUTPUT_FOLDERS; do
+        if [[ ! -d $i ]]; then
+            ALL_DATA_OK=0
+            break
+        fi
+    done
+
+    # check if the input and/ or output files have changed
+    if [[ $ALL_DATA_OK -eq 1 ]]; then
+        if [[ $(check_file_and_folder_checksums $CHECKSUM ) != "OK" ]]; then
+            ALL_DATA_OK=0
+        fi
+    fi
+
+
+    if [[ $ALL_DATA_OK -eq 1 ]]; then
+        print_and_log ""
+        print_and_log "Input data has not changed."
+        print_and_log "All output data already present."
+        print_and_log "Skipping $0"
+        print_and_log ""
+        script_end
+    fi
+
+    rm -f $CHECKSUM
+    compute_file_and_folder_checksums $CHECKSUM $INPUT_FILES $INPUT_FOLDERS
+fi
+
+EOF
+
+
+# ensure that all output folders exist
+cat << 'EOF' >> $OPTIONS_IMPORT
+
+# ensure that all output folders exist
+if [[ -n $OUTPUT_FOLDERS ]]; then
+    for i in $OUTPUT_FOLDERS; do
+        mkdir -p $i
+        verify_dir $i
+    done
+fi
+
+EOF
+
+cat <<'EOF' >> $OPTIONS_IMPORT
+
+# ensure that folders of all output files exist
+if [[ -n $OUTPUT_FILES ]]; then
+    for i in $OUTPUT_FILES; do
+        mkdir -p $(dirname $i)
+        verify_dir $(dirname $i)
+    done
+fi
+
+EOF
+
+
+
+echo "" >> $OPTIONS_IMPORT
+echo "rm -f $OPTIONS_IMPORT" >> $OPTIONS_IMPORT
+echo "" >> $OPTIONS_IMPORT
+
+. $OPTIONS_IMPORT
