@@ -893,34 +893,69 @@ rule compute_csd_local_model:
         """
 
 
-rule compose_5tt:
+rule segmentation_5tt:
     input:
+        brain = handle_storage('1000Brains_derivatives/{id}/{visit}/anat/{id}_{visit}_T1w_brain_1p25mm.nii.gz'),
         tpm_gm = handle_storage('1000Brains_derivatives/{id}/{visit}/dwi/TPM/{id}_{visit}_tpm_gm_1p25mm.nii.gz'),
         tpm_wm = handle_storage('1000Brains_derivatives/{id}/{visit}/dwi/TPM/{id}_{visit}_tpm_wm_1p25mm.nii.gz'),
         tpm_csf = handle_storage('1000Brains_derivatives/{id}/{visit}/dwi/TPM/{id}_{visit}_tpm_csf_1p25mm.nii.gz'),
     output:
-        tpm5tt = '1000Brains_derivatives/{id}/{visit}/dwi/csd/{id}_{visit}_5tt.nii.gz',
-    benchmark:
-        'Benchmarks/compose_5tt-{id}_{visit}.txt'
-    threads:
-        1
+        tpm5tt = '1000Brains_derivatives/{id}/{visit}/dwi/csd/{id}_{visit}_5tt_1p25mm.nii.gz',
+        L_Accu = '1000Brains_derivatives/{id}/{visit}/dwi/csd/{id}_{visit}_L_Accu_1p25mm.mif',
+        R_Accu = '1000Brains_derivatives/{id}/{visit}/dwi/csd/{id}_{visit}_R_Accu_1p25mm.mif',
+        L_Caud = '1000Brains_derivatives/{id}/{visit}/dwi/csd/{id}_{visit}_L_Caud_1p25mm.mif',
+        R_Caud = '1000Brains_derivatives/{id}/{visit}/dwi/csd/{id}_{visit}_R_Caud_1p25mm.mif',
+        L_Pall = '1000Brains_derivatives/{id}/{visit}/dwi/csd/{id}_{visit}_L_Pall_1p25mm.mif',
+        R_Pall = '1000Brains_derivatives/{id}/{visit}/dwi/csd/{id}_{visit}_R_Pall_1p25mm.mif',
+        L_Puta = '1000Brains_derivatives/{id}/{visit}/dwi/csd/{id}_{visit}_L_Puta_1p25mm.mif',
+        R_Puta = '1000Brains_derivatives/{id}/{visit}/dwi/csd/{id}_{visit}_R_Puta_1p25mm.mif',
+        L_Thal = '1000Brains_derivatives/{id}/{visit}/dwi/csd/{id}_{visit}_L_Thal_1p25mm.mif',
+        R_Thal = '1000Brains_derivatives/{id}/{visit}/dwi/csd/{id}_{visit}_R_Thal_1p25mm.mif',
+    params:
+        work = temp('1000Brains_derivatives/{id}/{visit}/dwi/csd/work_5tt'),
+        scs = "L_Accu R_Accu L_Caud R_Caud L_Pall R_Pall L_Puta R_Puta L_Thal R_Thal"
+    log:
+        log = '1000Brains_derivatives/{id}/{visit}/dwi/csd/{id}_{visit}_5tt.log',
     resources:
         gpus = 0,
-        mem = 3000,
-        time = 5
-    run:
-        import numpy as np
-        import nibabel as nib
-
-        p1 = nib.load(input.tpm_gm).get_data().astype(np.float)
-        p2 = nib.load(input.tpm_wm).get_data().astype(np.float)
-        p3 = nib.load(input.tpm_csf).get_data().astype(np.float)
-        zeros = np.zeros_like(p1).astype(np.float)
-
-        data = np.stack([p1, zeros, p2, p3, zeros], axis=3)
-
-        img = nib.Nifti1Image(data, nib.load(input.tpm_gm).affine)
-        nib.save(img, output.tpm5tt)
+        mem = 6000,
+        time = 60
+    threads:
+        1
+    shell:
+        SOURCE_COMMAND + """
+        old_wd=$(pwd)
+        if [[ -d {params.work} ]]; then
+            rm -fr {params.work}
+        fi
+        mkdir -p {params.work}
+        cd {params.work}
+        cp {input.brain} T1.nii.gz
+        run_first_all -m none -s $(echo {params.scs} | sed -e "s/ /,/g") -i T1.nii.gz -o first -b
+        cd ${{old_wd}}
+        sc_mif=""
+        for sc in {params.scs}; do
+            EXE="meshconvert -force {params.work}/first-${{sc}}_first.vtk {params.work}/${{sc}}.vtk -transform_first2real {input.brain}"
+            echo "$EXE"
+            eval "$EXE"
+            filename=$(echo "{output.L_Accu}" | sed -e "s/_L_Accu_1p25mm.mif/_${{sc}}_1p25mm.mif/")
+            EXE="mesh2pve -force {params.work}/${{sc}}.vtk {input.brain} ${{filename}}"
+            echo "$EXE"
+            eval "$EXE"
+            sc_mif="${{sc_mif}} ${{filename}}"
+        done
+        mrmath ${{sc_mif}} sum - | mrcalc - 1.0 -min {params.work}/all_sgms.mif
+        mrthreshold {input.tpm_wm} - -abs 0.001 | maskfilter - connect - -connectivity | mrcalc 1 - 1 -gt -sub {params.work}/remove_unconnected_wm_mask.mif -datatype bit
+        mrcalc {input.tpm_csf} {params.work}/remove_unconnected_wm_mask.mif -mult {params.work}/csf.mif
+        mrcalc 1.0 {params.work}/csf.mif -sub {params.work}/all_sgms.mif -min {params.work}/sgm.mif
+        mrcalc 1.0 {params.work}/csf.mif {params.work}/sgm.mif -add -sub {input.tpm_gm} {input.tpm_wm} -add -div {params.work}/multiplier.mif
+        mrcalc {params.work}/multiplier.mif -finite {params.work}/multiplier.mif 0.0 -if {params.work}/multiplier_noNAN.mif
+        mrcalc {input.tpm_gm} {params.work}/multiplier_noNAN.mif -mult {params.work}/remove_unconnected_wm_mask.mif -mult {params.work}/cgm.mif
+        mrcalc {input.tpm_wm} {params.work}/multiplier_noNAN.mif -mult {params.work}/remove_unconnected_wm_mask.mif -mult {params.work}/wm.mif
+        mrcalc 0 {params.work}/wm.mif -min {params.work}/path.mif
+        mrcat {params.work}/cgm.mif {params.work}/sgm.mif {params.work}/wm.mif {params.work}/csf.mif {params.work}/path.mif - -axis 3 | mrconvert - {params.work}/combined_precrop.mif -stride +2,+3,+4,+1
+        mrmath {params.work}/combined_precrop.mif sum - -axis 3 | mrthreshold - - -abs 0.5 | mrcrop -force {params.work}/combined_precrop.mif {output.tpm5tt} -mask -
+        """
 
 
 rule compute_5tt_kernel:
@@ -928,7 +963,7 @@ rule compute_5tt_kernel:
         dmri = handle_storage('1000Brains_derivatives/{id}/{visit}/dwi/1p25mm/NormB0/{id}_{visit}_b1000-dMRI060_dwi_1p25mm.nii.gz'),
         bval = handle_storage('1000Brains_derivatives/{id}/{visit}/dwi/1p25mm/NormB0/{id}_{visit}_b1000-dMRI060_dwi_1p25mm.bval'),
         bvec = handle_storage('1000Brains_derivatives/{id}/{visit}/dwi/1p25mm/NormB0/{id}_{visit}_b1000-dMRI060_dwi_1p25mm.bvec'),
-        tpm5tt = handle_storage('1000Brains_derivatives/{id}/{visit}/dwi/csd/{id}_{visit}_5tt.nii.gz'),
+        tpm5tt = handle_storage('1000Brains_derivatives/{id}/{visit}/dwi/csd/{id}_{visit}_5tt_1p25mm.nii.gz'),
     output:
         kernel_gm = '1000Brains_derivatives/{id}/{visit}/dwi/csd/{id}_{visit}_kernel_gm.txt',
         kernel_wm = '1000Brains_derivatives/{id}/{visit}/dwi/csd/{id}_{visit}_kernel_wm.txt',
@@ -962,10 +997,10 @@ rule compute_5tt_csd:
         ak_wm = handle_storage('1000Brains_derivatives/Average_Kernel_1000BRAINS/kernel_average_wm.txt'),
         ak_csf = handle_storage('1000Brains_derivatives/Average_Kernel_1000BRAINS/kernel_average_csf.txt'),
     output:
-        csd_gm = '1000Brains_derivatives/{id}/{visit}/dwi/csd/{id}_{visit}_csd_gm.nii.gz',
-        csd_wm = '1000Brains_derivatives/{id}/{visit}/dwi/csd/{id}_{visit}_csd_wm.nii.gz',
-        csd_csf = '1000Brains_derivatives/{id}/{visit}/dwi/csd/{id}_{visit}_csd_csf.nii.gz',
-        vf = '1000Brains_derivatives/{id}/{visit}/dwi/csd/{id}_{visit}_csd_vf.mif',
+        csd_gm = '1000Brains_derivatives/{id}/{visit}/dwi/csd/{id}_{visit}_csd_gm_1p25mm.nii.gz',
+        csd_wm = '1000Brains_derivatives/{id}/{visit}/dwi/csd/{id}_{visit}_csd_wm_1p25mm.nii.gz',
+        csd_csf = '1000Brains_derivatives/{id}/{visit}/dwi/csd/{id}_{visit}_csd_csf_1p25mm.nii.gz',
+        vf = '1000Brains_derivatives/{id}/{visit}/dwi/csd/{id}_{visit}_csd_vf_1p25mm.mif',
     benchmark:
         'Benchmarks/compute_5tt_csd-{id}_{visit}.txt'
     threads:
@@ -995,8 +1030,8 @@ rule compute_5tt_csd:
 
 rule tractography:
     input:
-        tpm5tt = handle_storage('1000Brains_derivatives/{id}/{visit}/dwi/csd/{id}_{visit}_5tt.nii.gz'),
-        csd_wm = handle_storage('1000Brains_derivatives/{id}/{visit}/dwi/csd/{id}_{visit}_csd_wm.nii.gz'),
+        tpm5tt = handle_storage('1000Brains_derivatives/{id}/{visit}/dwi/csd/{id}_{visit}_5tt_1p25mm.nii.gz'),
+        csd_wm = handle_storage('1000Brains_derivatives/{id}/{visit}/dwi/csd/{id}_{visit}_csd_wm_1p25mm.nii.gz'),
     output:
         streamlines = '1000Brains_derivatives/{id}/{visit}/dwi/tracts/{id}_{visit}_tracks_act_{num}-{part}.tck',
         seeds = '{id}/{visit}/dMRI/Tractography/{id}_{visit}-seeds_act_{num}-{part}.txt',
