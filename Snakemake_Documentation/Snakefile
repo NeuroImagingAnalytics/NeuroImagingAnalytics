@@ -1,0 +1,97 @@
+import shutil
+
+onstart:
+    print('Starting ...')
+
+rule copy_source_files:
+    """
+    Copy files to local directory.
+    """
+    input:
+        head = '/usr/share/fsl/data/standard/MNI152_T1_1mm.nii.gz',
+        mask = '/usr/share/fsl/data/standard/MNI152_T1_1mm_brain_mask.nii.gz',
+    output:
+        head = 'Files/MNI152_T1_1mm_{num,\d+}.nii.gz',
+        mask = 'Files/MNI152_T1_1mm_{num,\d+}_brain_mask.nii.gz',
+    resources:
+        gpus = 0,
+        mem = 20000,
+        time = 2,
+    threads:
+        1
+    shell:
+        """
+        rsync -av {input.head} {output.head}
+        rsync -av {input.mask} {output.mask}
+        """
+
+
+rule ensure_binary_mask:
+    """
+    Forces the brain mask to be binary with values 0 and 1.
+    """
+    input:
+        mask = 'Files/MNI152_T1_1mm_{num}_brain_mask.nii.gz',
+    output:
+        mask = 'Files/MNI152_T1_1mm_{num,\d+}_brain_mask_bin.nii.gz',
+    resources:
+        gpus = 2,
+        mem = 1000,
+        time = 3600
+    threads:
+        1
+    shell:
+        """
+        fslmaths {input.mask} -bin {output.mask}
+        """
+
+
+rule extract_brain_region:
+    """
+    Use brain mask to extract brain area from T1w volume.
+    """
+    input:
+        head = 'Files/MNI152_T1_1mm_{num}.nii.gz',
+        mask = 'Files/MNI152_T1_1mm_{num}_brain_mask_bin.nii.gz',
+    output:
+        brain = 'Files/MNI152_T1_1mm_{num,\d+}_brain.nii.gz',
+    resources:
+        gpus = 2,
+        mem = 1000,
+        time = 3600
+    threads:
+        1
+    shell:
+        """
+        fslmaths {input.head} -mas {input.mask} {output.brain}
+        """
+
+
+rule average_brains:
+    """
+    Average all three brain volumes to a single volume.
+    """
+    input:
+        brain_1 = 'Files/MNI152_T1_1mm_01_brain.nii.gz',
+        brain_2 = 'Files/MNI152_T1_1mm_02_brain.nii.gz',
+        brain_3 = 'Files/MNI152_T1_1mm_03_brain.nii.gz',
+    output:
+        abrain = 'Files/Average_MNI152_T1_1mm_brain.nii.gz'
+    resources:
+        gpus = 2,
+        mem = 1000,
+        time = 3600
+    threads:
+        1
+    shell:
+        """
+        ./fsladd {output.abrain} -m {input.brain_1} {input.brain_2} {input.brain_3}
+        """
+
+
+onsuccess:
+    print('Success :-)')
+
+
+onerror:
+    print('FAILED!')
