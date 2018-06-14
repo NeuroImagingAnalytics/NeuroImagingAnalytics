@@ -1,0 +1,37 @@
+{
+    "system" : "imecas",
+    "cpu_cores" : "16",
+    "storage_path" : "/data/Team_Caspers/Schreiber/JURECA_DATA/RELEASE",
+    "source_command" : {
+            "default" : [
+                "mrtrix_prefix=\"/data/Team_Caspers/Software/MRtrix-0.3.15\"",
+                "export PATH=\"${{mrtrix_prefix}}/bin:${{mrtrix_prefix}}/scripts:${{PATH}}\"",
+                "# export LIBRARY_PATH=\"${{mrtrix_prefix}}/lib:${{LIBRARY_PATH}}\"",
+                "export LD_LIBRARY_PATH=\"${{mrtrix_prefix}}/lib:${{LD_LIBRARY_PATH}}\"",
+                "",
+                "ants_prefix=\"/data/Team_Caspers/Software/ANTs-2.1.0\"",
+                "export PATH=\"${{ants_prefix}}/bin:${{ants_prefix}}/Scripts:${{PATH}}\"",
+                "# export LIBRARY_PATH=\"${{ants_prefix}}/lib:${{LIBRARY_PATH}}\"",
+                "export LD_LIBRARY_PATH=\"${{ants_prefix}}/lib:${{LD_LIBRARY_PATH}}\"",
+                "export ANTSPATH=\"${{ants_prefix}}/bin/\"",
+                "",
+                "export PATH=\"/data/Team_Caspers/Software/FZJ:$PATH\"",
+                "export FZJDIR=\"/data/Team_Caspers/Software/FZJ_dMRI\"",
+                "export PATH=\"/data/Team_Caspers/Software/FZJ_dMRI:$PATH\"",
+                "",
+                "export PATH=\"/data/Team_Caspers/Software/c3d:$PATH\"",
+                "",
+                "export PATH=\"/data/Team_Caspers/Software/FSL_extra-5.0.9/bin:$PATH\"",
+                "",
+                "source /data/Team_Caspers/Schreiber/Anaconda/anaconda3/bin/activate"
+            ],
+            "freesurfer" : [
+                "export FREESURFER_HOME=\"/nfsusr/local/freesurfer6\"",
+                "export FS_FREESURFERENV_NO_OUTPUT=''",
+                "source ${FREESURFER_HOME}/FreeSurferEnv.sh"
+            ],
+            "snakemake" : [
+                "source /data/Team_Caspers/Schreiber/Anaconda/anaconda3/bin/activate"
+            ]
+    }
+}

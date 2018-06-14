@@ -1,0 +1,292 @@
+# Copyright 2017 Forschungszentrum Juelich
+
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+rule freesurfer:
+    input:
+        t1 = handle_storage('1000Brains_BIDS/{id}/{visit}/anat/{id}_{visit}_T1w.nii.gz'),
+    output:
+        pial = '1000Brains_derivatives/{id}/{visit}/anat/freesurfer/{id}_{visit}/surf/lh.pial',
+    params:
+        subjectdir = '1000Brains_derivatives/{id}/{visit}/anat/freesurfer',
+    benchmark:
+        'Benchmarks/freesurfer-{id}_{visit}.txt'
+    threads:
+        1
+    resources:
+        gpus = 0,
+        mem = 2500,
+        time = 1200
+    shell:
+        SOURCE_COMMAND_FREESURFER + """
+        export SUBJECTS_DIR="{params.subjectdir}"
+        recon-all -i {input.t1} -s {wildcards.id}_{wildcards.visit} -all
+        """
+
+
+rule brain_mask_orig:
+    input:
+        t1 = handle_storage('1000Brains_BIDS/{id}/{visit}/anat/{id}_{visit}_T1w.nii.gz'),
+        tpm_gm = handle_storage('1000Brains_derivatives/{id}/{visit}/CAT/mri/p1{id}_{visit}-t1.nii'),
+        tpm_wm = handle_storage('1000Brains_derivatives/{id}/{visit}/CAT/mri/p2{id}_{visit}-t1.nii'),
+        tpm_csf = handle_storage('1000Brains_derivatives/{id}/{visit}/CAT/mri/p3{id}_{visit}-t1.nii'),
+    output:
+        brain_mask_pm = '1000Brains_derivatives/{id}/{visit}/anat/{id}_{visit}_T1w_brain_mask_pm.nii.gz',
+        brain_mask = '1000Brains_derivatives/{id}/{visit}/anat/{id}_{visit}_T1w_brain_mask.nii.gz',
+        brain = '1000Brains_derivatives/{id}/{visit}/anat/{id}_{visit}_T1w_brain.nii.gz',
+    params:
+        threshold = 0.5
+    benchmark:
+        'Benchmarks/brain_mask_orig-{id}_{visit}.txt'
+    threads:
+        1
+    resources:
+        gpus = 0,
+        mem = 2500,
+        time = 5
+    shell:
+        SOURCE_COMMAND + """
+        fslmaths {input.tpm_gm} -add {input.tpm_wm} -add {input.tpm_csf} {output.brain_mask_pm}
+        fslmaths {output.brain_mask_pm} -thr {params.threshold} -bin -fillh {output.brain_mask} -odt char
+        fslmaths {input.t1} -mas {output.brain_mask} {output.brain}
+        """
+
+
+rule brain_biascorrect:
+    input:
+        brain = handle_storage('1000Brains_derivatives/{id}/{visit}/anat/{id}_{visit}_T1w_brain.nii.gz'),
+        brain_mask = handle_storage('1000Brains_derivatives/{id}/{visit}/anat/{id}_{visit}_T1w_brain_mask.nii.gz'),
+        tpm_wm = handle_storage('1000Brains_derivatives/{id}/{visit}/CAT/mri/p2{id}_{visit}-t1.nii'),
+    output:
+        brain_biascorrect = '1000Brains_derivatives/{id}/{visit}/anat/{id}_{visit}_T1w_brain_biascorrect.nii.gz',
+        biasfield = '1000Brains_derivatives/{id}/{visit}/anat/{id}_{visit}_T1w_brain_biasfield.nii.gz',
+    benchmark:
+        'Benchmarks/brain_biascorrect-{id}_{visit}.txt'
+    threads:
+        1
+    resources:
+        gpus = 0,
+        mem = 2500,
+        time = 30
+    shell:
+        SOURCE_COMMAND + """
+        N4BiasFieldCorrection -v 1 -d 3 -i {input.brain} -o [{output.brain_biascorrect},{output.biasfield}] --shrink-factor 2 \
+                              --mask-image {input.brain_mask} --rescale-intensities 1 --weight-image {input.tpm_wm}
+        """
+
+
+rule align_t1w_colin:
+    """
+    Align the biascorrected T1w brain that is still in its original space (sagittal acquisition) to the colin template.
+    The resulting transform can be combined with that from align_apm_t1w to transform ROIs from Colin space directly to dMRI space.
+    """
+    input:
+        brain_mni = handle_storage('1000Brains_derivatives/{id}/{visit}/anat/{id}_{visit}_T1w_brain_biascorrect.nii.gz'),
+        colin = 'Projects/Anatomy_v23eintern/colin27T1_seg.nii.gz',
+    output:
+        affine = '1000Brains_derivatives/{id}/{visit}/anat/Colin/ANTs_T1w/{id}_{visit}_T1w_2_Colin_0GenericAffine.mat',
+        warp = '1000Brains_derivatives/{id}/{visit}/anat/Colin/ANTs_T1w/{id}_{visit}_T1w_2_Colin_1Warp.nii.gz',
+        invwarp = '1000Brains_derivatives/{id}/{visit}/anat/Colin/ANTs_T1w/{id}_{visit}_T1w_2_Colin_1InverseWarp.nii.gz',
+        warped = '1000Brains_derivatives/{id}/{visit}/anat/Colin/ANTs_T1w/{id}_{visit}_T1w_2_Colin_Warped.nii.gz',
+    params:
+        ants_prefix = '1000Brains_derivatives/{id}/{visit}/anat/Colin/ANTs_T1w/{id}_{visit}_T1w_2_Colin_',
+        converge_lin = '1000x500x250x100',
+        converge_syn = '100x70x50x20',
+        shrink_factors = '8x4x2x1'
+    resources:
+        gpus = 0,
+        mem = 2500,
+        time = 500,
+    threads:
+        CPU_CORES
+    shell:
+        SOURCE_COMMAND + """
+        # antsRegistrationSyN.sh -d 3 \
+        #                        -f {input.colin} \
+        #                        -m {input.brain_mni} \
+        #                        -o {params.ants_prefix} \
+        #                        -n {threads} \
+        #                        -t s \
+        #                        -j 1
+        export OMP_NUM_THREADS={threads}
+        export ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS={threads}
+        antsRegistration --verbose 0 \
+                         --dimensionality 3 \
+                         --float 0 \
+                         --output {params.ants_prefix} \
+                         --interpolation Linear \
+                         --use-histogram-matching 1 \
+                         --winsorize-image-intensities [0.005,0.995] \
+                         --initial-moving-transform [{input.colin},{input.brain_mni},1] \
+                         --transform Rigid[0.1] \
+                         --metric MI[{input.colin},{input.brain_mni},1,32,Regular,0.25] \
+                         --convergence [{params.converge_lin},1e-6,10] \
+                         --shrink-factors {params.shrink_factors} \
+                         --smoothing-sigmas 3x2x1x0vox \
+                         --transform Affine[0.1] \
+                         --metric MI[{input.colin},{input.brain_mni},1,32,Regular,0.25] \
+                         --convergence [{params.converge_lin},1e-6,10] \
+                         --shrink-factors {params.shrink_factors} \
+                         --smoothing-sigmas 3x2x1x0vox \
+                         --transform SyN[0.1,3,0] \
+                         --metric CC[{input.colin},{input.brain_mni},1,4] \
+                         --convergence [{params.converge_syn},1e-6,10] \
+                         --shrink-factors {params.shrink_factors} \
+                         --smoothing-sigmas 3x2x1x0vox
+
+        antsApplyTransforms --verbose 0 \
+                            --dimensionality 3 \
+                            --input-image-type 0 \
+                            --input {input.brain_mni} \
+                            --reference-image {input.colin} \
+                            --output {output.warped} \
+                            --interpolation Linear \
+                            --transform {output.warp} \
+                            --transform {output.affine} \
+                            --default-value 0 \
+                            --float 0
+        """
+
+
+rule align_t1w_MNI152:
+    """
+    Align the biascorrected T1w brain that is still in its original space (sagittal acquisition) to the MNI152 template (from FSL).
+    The resulting transform can be combined with that from align_apm_t1w to transform ROIs from MNI152 space directly to dMRI space.
+    """
+    input:
+        t1_brain = handle_storage('1000Brains_derivatives/{id}/{visit}/anat/{id}_{visit}_T1w_brain_biascorrect.nii.gz'),
+        mni_brain = 'Projects/1000BRAINS_Snakemake/MNI152_T1_1mm_brain.nii.gz',
+    output:
+        affine = '1000Brains_derivatives/{id}/{visit}/anat/MNI152/ANTs_T1w/{id}_{visit}_T1w_2_MNI152_0GenericAffine.mat',
+        warp = '1000Brains_derivatives/{id}/{visit}/anat/MNI152/ANTs_T1w/{id}_{visit}_T1w_2_MNI152_1Warp.nii.gz',
+        invwarp = '1000Brains_derivatives/{id}/{visit}/anat/MNI152/ANTs_T1w/{id}_{visit}_T1w_2_MNI152_1InverseWarp.nii.gz',
+        warped = '1000Brains_derivatives/{id}/{visit}/anat/MNI152/ANTs_T1w/{id}_{visit}_T1w_2_MNI152_Warped.nii.gz',
+    params:
+        ants_prefix = '1000Brains_derivatives/{id}/{visit}/anat/MNI152/ANTs_T1w/{id}_{visit}_T1w_2_MNI152_',
+        converge_lin = '1000x500x250x100',
+        converge_syn = '100x70x50x20',
+        shrink_factors = '8x4x2x1'
+    resources:
+        gpus = 0,
+        mem = 2500,
+        time = 500,
+    threads:
+        int(CPU_CORES / 2)
+    shell:
+        SOURCE_COMMAND + """
+        # antsRegistrationSyN.sh -d 3 \
+        #                        -f {input.mni_brain} \
+        #                        -m {input.t1_brain} \
+        #                        -o {params.ants_prefix} \
+        #                        -n {threads} \
+        #                        -t s \
+        #                        -j 1
+        echo "Threads: {threads}"
+        export OMP_NUM_THREADS={threads}
+        export ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS={threads}
+        antsRegistration --verbose 0 \
+                         --dimensionality 3 \
+                         --float 0 \
+                         --output {params.ants_prefix} \
+                         --interpolation Linear \
+                         --use-histogram-matching 1 \
+                         --winsorize-image-intensities [0.005,0.995] \
+                         --initial-moving-transform [{input.mni_brain},{input.t1_brain},1] \
+                         --transform Rigid[0.1] \
+                         --metric MI[{input.mni_brain},{input.t1_brain},1,32,Regular,0.25] \
+                         --convergence [{params.converge_lin},1e-6,10] \
+                         --shrink-factors {params.shrink_factors} \
+                         --smoothing-sigmas 3x2x1x0vox \
+                         --transform Affine[0.1] \
+                         --metric MI[{input.mni_brain},{input.t1_brain},1,32,Regular,0.25] \
+                         --convergence [{params.converge_lin},1e-6,10] \
+                         --shrink-factors {params.shrink_factors} \
+                         --smoothing-sigmas 3x2x1x0vox \
+                         --transform SyN[0.1,3,0] \
+                         --metric CC[{input.mni_brain},{input.t1_brain},1,4] \
+                         --convergence [{params.converge_syn},1e-6,10] \
+                         --shrink-factors {params.shrink_factors} \
+                         --smoothing-sigmas 3x2x1x0vox
+
+        antsApplyTransforms --verbose 0 \
+                            --dimensionality 3 \
+                            --input-image-type 0 \
+                            --input {input.t1_brain} \
+                            --reference-image {input.mni_brain} \
+                            --output {output.warped} \
+                            --interpolation Linear \
+                            --transform {output.warp} \
+                            --transform {output.affine} \
+                            --default-value 0 \
+                            --float 0
+        """
+
+
+rule brain_mni_align:
+    input:
+        brain = handle_storage('1000Brains_derivatives/{id}/{visit}/anat/{id}_{visit}_T1w_brain_biascorrect.nii.gz'),
+        brain_mask_pm = handle_storage('1000Brains_derivatives/{id}/{visit}/anat/{id}_{visit}_T1w_brain_mask_pm.nii.gz'),
+        template = 'Projects/1000BRAINS_Snakemake/MNI152_T1_1mm_brain.nii.gz'
+    output:
+        trafo_dof12 = '1000Brains_derivatives/{id}/{visit}/anat/tmp/{id}_{visit}_T1w_brain_to_MNI_dof12.mat',
+        trafo_dof06 = '1000Brains_derivatives/{id}/{visit}/anat/tmp/{id}_{visit}_T1w_brain_to_MNI_dof06.mat',
+        brain_mni = '1000Brains_derivatives/{id}/{visit}/anat/{id}_{visit}_T1w_brain_1p00mm.nii.gz',
+        brain_mask_pm_mni = '1000Brains_derivatives/{id}/{visit}/anat/tmp/{id}_{visit}_T1w_brain_mask_pm_1p00mm.nii.gz',
+        brain_mask_mni = '1000Brains_derivatives/{id}/{visit}/anat/{id}_{visit}_T1w_brain_mask_1p00mm.nii.gz',
+    params:
+        threshold = 0.5
+    benchmark:
+        'Benchmarks/brain_mni_align-{id}_{visit}.txt'
+    threads:
+        1
+    resources:
+        gpus = 0,
+        mem = 2500,
+        time = 20
+    shell:
+        SOURCE_COMMAND + """
+        flirt -in {input.brain} -ref {input.template} -usesqform -omat {output.trafo_dof12} -dof 12
+        aff2rigid {output.trafo_dof12} {output.trafo_dof06}
+        flirt -in {input.brain} -ref {input.template} -usesqform -init {output.trafo_dof06} -applyxfm -interp spline -out {output.brain_mni}
+        flirt -in {input.brain_mask_pm} -ref {input.template} -usesqform -init {output.trafo_dof06} -applyxfm -interp spline -out {output.brain_mask_pm_mni}
+        fslmaths {output.brain_mask_pm_mni} -thr {params.threshold} -bin -fillh {output.brain_mask_mni} -odt char
+        fslmaths {output.brain_mni} -mas {output.brain_mask_mni} -max 0 {output.brain_mni}
+        """
+
+
+rule brain_resample_1p25mm:
+    input:
+        brain_mni = handle_storage('1000Brains_derivatives/{id}/{visit}/anat/{id}_{visit}_T1w_brain_1p00mm.nii.gz'),
+        brain_mask_pm_mni = handle_storage('1000Brains_derivatives/{id}/{visit}/anat/tmp/{id}_{visit}_T1w_brain_mask_pm_1p00mm.nii.gz'),
+    output:
+        brain_mni = '1000Brains_derivatives/{id}/{visit}/anat/{id}_{visit}_T1w_brain_1p25mm.nii.gz',
+        brain_mask_pm_mni = '1000Brains_derivatives/{id}/{visit}/anat/tmp/{id}_{visit}_T1w_brain_mask_pm_1p25mm.nii.gz',
+        brain_mask_mni = '1000Brains_derivatives/{id}/{visit}/anat/{id}_{visit}_T1w_brain_mask_1p25mm.nii.gz',
+    params:
+        threshold = 0.5
+    benchmark:
+        'Benchmarks/brain_resample_1p25mm-{id}_{visit}.txt'
+    threads:
+        1
+    resources:
+        gpus = 0,
+        mem = 2500,
+        time = 5
+    shell:
+        SOURCE_COMMAND + """
+        flirt -in {input.brain_mni} -out {output.brain_mni} -interp spline -ref {input.brain_mni} -applyisoxfm 1.25
+        flirt -in {input.brain_mask_pm_mni} -out {output.brain_mask_pm_mni} -interp spline -ref {input.brain_mask_pm_mni} -applyisoxfm 1.25
+        fslmaths {output.brain_mask_pm_mni} -thr {params.threshold} -bin -fillh {output.brain_mask_mni} -odt char
+        fslmaths {output.brain_mni} -mas {output.brain_mask_mni} -max 0 {output.brain_mni}
+        """

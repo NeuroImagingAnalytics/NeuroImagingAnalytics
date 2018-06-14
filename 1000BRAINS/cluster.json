@@ -8,19 +8,18 @@
         "time" : "23:59:59"
     },
 
-    "align_apm_t1w" :
+    "anisotropicpowermap" :
     {
-        "cores" : 48
+        "partition" : "mem256",
+        "cores" : 48,
+        "gpus" : 0,
+        "mem" : 240000,
+        "time" : "23:0:0"
     },
 
-    "transform_tpms" :
+    "align_t1w_MNI152" :
     {
-        "cores" : 48
-    },
-
-    "noddi_prtcl" :
-    {
-        "cores" : 48
+        "cores" : 48,
     },
 
     "mdt_init" :
@@ -29,7 +28,7 @@
         "cores" : 24,
         "gpus" : 1,
         "mem" : 96000,
-        "time" : "00:05:00"
+        "time" : "23:59:59"
     },
 
     "noddi_mdt" :
@@ -38,20 +37,15 @@
         "cores" : 24,
         "gpus" : 4,
         "mem" : 96000,
-        "time" : "01:30:00"
+        "time" : "23:59:59"
     },
 
     "noddi_merge_and_noise_std" :
     {
         "partition" : "gpus",
-        "cores" : 48,
-        "gpus" : 0,
+        "cores" : 24,
+        "gpus" : 4,
         "mem" : 96000,
-        "time" : "00:20:00"
-    },
-
-    "diffusion_tensor" :
-    {
-        "cores" : 48
+        "time" : "23:59:59"
     }
 }

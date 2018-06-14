@@ -1,0 +1,25 @@
+{
+    "system" : "jureca",
+    "cpu_cores" : "24",
+    "storage_path" : "/data/inm1/mapping/RELEASE",
+    "source_command" : {
+            "default" : [
+                "source /data/inm1/mapping/software-2016b.source",
+                "module load FZJ_dMRI/1.0.0"
+            ],
+            "freesurfer" : [
+                "module purge --force",
+                "module use /usr/local/software/jureca/OtherStages",
+                "module load Stages/Devel-2017a",
+                "module load GCCcore/.5.4.0",
+                "module load FreeSurfer/6.0.0",
+                "export FS_FREESURFERENV_NO_OUTPUT=''",
+                "source /usr/local/software/jureca/Stages/Devel-2017a/software/FreeSurfer/6.0.0-GCCcore-5.4.0/FreeSurferEnv.sh",
+                "module use /data/inm1/mapping/software/2016b/modules",
+                "module load FZJ/1.0.0"
+            ],
+            "snakemake" : [
+                "source /data/inm1/mapping/snakemake_3.13.3-2016b.source"
+            ]
+    }
+}
